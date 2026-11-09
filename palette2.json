@@ -1,0 +1,38 @@
+{
+  "colors": [
+    {
+      "hex": "#D01883",
+      "name": "Medium Violet Red"
+    },
+    {
+      "hex": "#D84A80",
+      "name": "Pale Violet Red"
+    },
+    {
+      "hex": "#E0546E",
+      "name": "Indian Red"
+    },
+    {
+      "hex": "#BA211F",
+      "name": "Fire Brick"
+    },
+    {
+      "hex": "#D97255",
+      "name": "Salmon"
+    },
+    {
+      "hex": "#E0A276",
+      "name": "Dark Salmon"
+    }
+  ],
+  "harmony": "Analogous",
+  "seed": "palette-studio-welcome",
+  "settings": {
+    "harmony": "Analogous",
+    "temperature": "Balanced",
+    "saturation": "Balanced",
+    "lightness": "Balanced",
+    "contrast": 62
+  },
+  "createdAt": 1794265162203
+}
