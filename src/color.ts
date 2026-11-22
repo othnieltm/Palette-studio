@@ -326,6 +326,86 @@ export const makePalette = (
   return { colors: finalColors, harmony, settings: { ...settings }, seed: seedValue, createdAt: Date.now() }
 }
 
+export const makePaletteFromImage = (
+  imageColors: string[],
+  settings: GenerationSettings,
+  locked: (PaletteColor | undefined)[] = [],
+  seedValue?: string,
+): Palette => {
+  if (imageColors.length === 0) return makePalette(settings)
+
+  let seedState = 2166136261
+  if (seedValue) {
+    for (let index = 0; index < seedValue.length; index += 1) {
+      seedState ^= seedValue.charCodeAt(index)
+      seedState = Math.imul(seedState, 16777619)
+    }
+  } else {
+    seedState = (seedState ^ Date.now()) >>> 0
+  }
+  const random = () => {
+    seedState += 0x6D2B79F5
+    let value = seedState
+    value = Math.imul(value ^ (value >>> 15), value | 1)
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+
+  const weighted = imageColors.slice(0, 6).map((hex) => hslFromHex(hex))
+  const meanHue = weighted.reduce((sum, color) => sum + color.hue, 0) / weighted.length
+  const meanLightness = weighted.reduce((sum, color) => sum + color.lightness, 0) / weighted.length
+  const meanSaturation = weighted.reduce((sum, color) => sum + color.saturation, 0) / weighted.length
+
+  const harmony = settings.harmony === 'Random Harmony'
+    ? HARMONIES[Math.floor(Math.random() * 6)]
+    : settings.harmony
+  const harmonyOffsets = harmonyHues(meanHue, harmony)
+
+  const saturationBase = settings.saturation === 'Muted' ? 0.42 : settings.saturation === 'Vibrant' ? 0.88 : 0.68
+  const lightnessBase = settings.lightness === 'Dark' ? 0.34 : settings.lightness === 'Light' ? 0.68 : 0.52
+  const contrast = Math.max(0, Math.min(100, settings.contrast)) / 100
+
+  const colors = imageColors.slice(0, 6).map((hex, index) => {
+    const source = hslFromHex(hex)
+    const sourceHue = source.hue
+    const harmonyInfluence = (1 - contrast) * 0.16
+    const baseHue = harmony === 'Monochromatic'
+      ? sourceHue
+      : sourceHue + ((harmonyOffsets[index] - meanHue) - (sourceHue - meanHue)) * harmonyInfluence
+    const variantHueOffset = (random() - 0.5) * 42
+      + (index % 2 === 0 ? 8 : -8)
+      + (settings.harmony === 'Monochromatic' ? 0 : (random() - 0.5) * 18)
+    const adjustedHue = adjustHueForTemperature(baseHue + variantHueOffset, settings.temperature)
+      const saturationVariation = (random() - 0.5) * 0.28
+      const saturation = Math.max(0, Math.min(1,
+        source.saturation * 0.68 + meanSaturation * 0.08 + saturationBase * 0.24
+        + (settings.saturation === 'Balanced' ? 0 : settings.saturation === 'Vibrant' ? 0.12 : -0.12)
+        + saturationVariation,
+      ))
+    const relativeLightness = (source.lightness - meanLightness) * (0.45 + contrast * 0.55)
+    const variantLightnessOffset = (random() - 0.5) * 0.18
+      + (index % 3 === 0 ? -0.06 : index % 3 === 2 ? 0.07 : 0)
+    const lightness = Math.max(0.08, Math.min(0.92,
+      lightnessBase * 0.18 + source.lightness * 0.82 + relativeLightness * 0.15 + variantLightnessOffset,
+    ))
+    const colorHex = hslToHex(adjustedHue, saturation, lightness)
+    return { hex: colorHex, name: colorName(colorHex) }
+  })
+
+  while (colors.length < 6) {
+    const source = colors[colors.length % imageColors.length] ?? colors[0]
+    colors.push(source ? { ...source } : { hex: '#808080', name: 'Gray' })
+  }
+
+  return {
+    colors: colors.map((color, index) => locked[index] ?? color),
+    harmony,
+    settings: { ...settings },
+    seed: seedValue,
+    createdAt: Date.now(),
+  }
+}
+
 export const seededPalette = (settings: GenerationSettings, seed: string, seedColor?: string, locked: PaletteColor[] = []) => {
   const random = randomFromSeed(`${seed}|${settings.harmony}|${settings.temperature}|${settings.saturation}|${settings.lightness}|${settings.contrast}`)
   return makePalette(settings, seedColor, seed, locked, random)

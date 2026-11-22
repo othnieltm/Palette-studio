@@ -4,6 +4,7 @@ import {
   colorName,
   HARMONIES,
   makePalette,
+  makePaletteFromImage,
   readableTextColor,
   resolveSeed,
   seededPalette,
@@ -21,9 +22,9 @@ const DEFAULT_SETTINGS: GenerationSettings = {
   contrast: 62,
 }
 
-const initialPalette = seededPalette(DEFAULT_SETTINGS, 'palette-studio-welcome')
+const initialPalette = makePalette(DEFAULT_SETTINGS)
 
-type IconName = 'spark' | 'copy' | 'check' | 'lock' | 'unlock' | 'heart' | 'sliders' | 'close' | 'arrow' | 'trash' | 'download' | 'keyboard'
+type IconName = 'spark' | 'copy' | 'check' | 'lock' | 'unlock' | 'heart' | 'sliders' | 'close' | 'arrow' | 'trash' | 'download' | 'keyboard' | 'image'
 
 function isPalette(value: unknown): value is Palette {
   if (!value || typeof value !== 'object') return false
@@ -70,6 +71,7 @@ function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
     trash: <><path d="M3 6h18m-2 0-.9 14H5.9L5 6m4 0V4h6v2m-5 4v6m4-6v6" /></>,
     download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5m-5 5V3" /></>,
     keyboard: <><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M8 16h8" /></>,
+    image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.5" /><path d="m21 15-5-5L5 20" /></>,
   }
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>
 }
@@ -89,7 +91,16 @@ function App() {
   const [notice, setNotice] = useState(storedPalettes.error)
   const [focusedColor, setFocusedColor] = useState(0)
   const [copying, setCopying] = useState<number | null>(null)
+  const [showImage, setShowImage] = useState(false)
+  const [imagePreview, setImagePreview] = useState('')
+  const [imageName, setImageName] = useState('')
+  const [imageColors, setImageColors] = useState<string[]>([])
+  const [imageError, setImageError] = useState('')
+  const [imageVariants, setImageVariants] = useState<Palette[]>([])
+  const [selectedVariant, setSelectedVariant] = useState(0)
   const seedRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const imageVariantCounter = useRef(0)
 
   useEffect(() => {
     if (!notice) return
@@ -97,11 +108,42 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  function generateImageVariants(imageSeed?: string) {
+    if (!imageColors.length) return
+    imageVariantCounter.current += 1
+    const batchSeed = imageSeed ?? `${imageName || 'uploaded-image'}-${imageVariantCounter.current}`
+    const nextVariants = Array.from({ length: 6 }, (_, index) => makePaletteFromImage(
+      imageColors,
+      settings,
+      palette.colors.map((color, index) => locks[index] ? color : undefined),
+      `${batchSeed}-${index + 1}`,
+    ))
+    setImageVariants(nextVariants)
+    setSelectedVariant(0)
+    setPalette(nextVariants[0])
+    setNotice('6 image palettes generated')
+  }
+
   const generate = useCallback(() => {
     const preserved = palette.colors.map((color, index) => locks[index] ? color : undefined)
-    setPalette(makePalette(settings, undefined, undefined, preserved))
-    setNotice('New palette generated')
-  }, [locks, palette, settings])
+    if (imageColors.length) {
+      imageVariantCounter.current += 1
+      const batchSeed = `${imageName || 'uploaded-image'}-${imageVariantCounter.current}`
+      const nextVariants = Array.from({ length: 6 }, (_, index) => makePaletteFromImage(
+        imageColors,
+        settings,
+        preserved,
+        `${batchSeed}-${index + 1}`,
+      ))
+      setImageVariants(nextVariants)
+      setSelectedVariant(0)
+      setPalette(nextVariants[0])
+      setNotice('6 image palettes generated')
+    } else {
+      setPalette(makePalette(settings, undefined, undefined, preserved))
+      setNotice('New palette generated')
+    }
+  }, [imageColors, imageName, locks, palette, settings])
 
   const toggleLock = useCallback((index: number) => {
     setLocks((current) => current.map((isLocked, colorIndex) => colorIndex === index ? !isLocked : isLocked))
@@ -144,6 +186,12 @@ function App() {
     setPalette(item)
     setSettings(item.settings)
     setLocks(Array(6).fill(false))
+    setImageColors([])
+    setImagePreview('')
+    setImageName('')
+    setImageVariants([])
+    setSelectedVariant(0)
+    setShowImage(false)
     setShowSaved(false)
     setNotice('Palette loaded')
   }
@@ -216,6 +264,146 @@ function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
+  function extractImagePalette(file: File) {
+    if (!file.type.startsWith('image/')) {
+      setImageError('Choose a valid image file.')
+      return
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setImageError('Choose an image smaller than 12 MB.')
+      return
+    }
+
+    setImageError('')
+    setImageName(file.name)
+    const reader = new FileReader()
+    reader.onerror = () => setImageError('Could not read that image.')
+    reader.onload = () => {
+      const source = String(reader.result)
+      setImagePreview(source)
+      const image = new Image()
+      image.onerror = () => setImageError('Could not decode that image.')
+      image.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          const scale = Math.min(1, 128 / Math.max(image.naturalWidth, image.naturalHeight))
+          canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+          canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+          const context = canvas.getContext('2d', { willReadFrequently: true })
+          if (!context) throw new Error('Canvas is unavailable.')
+          context.drawImage(image, 0, 0, canvas.width, canvas.height)
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+          const samples = new Map<string, { red: number; green: number; blue: number; count: number }>()
+
+          for (let index = 0; index < pixels.length; index += 4) {
+            const alpha = pixels[index + 3]
+            if (alpha < 128) continue
+            const red = pixels[index]
+            const green = pixels[index + 1]
+            const blue = pixels[index + 2]
+            const key = `${red >> 3}-${green >> 3}-${blue >> 3}`
+            const sample = samples.get(key) ?? { red: 0, green: 0, blue: 0, count: 0 }
+            sample.red += red
+            sample.green += green
+            sample.blue += blue
+            sample.count += 1
+            samples.set(key, sample)
+          }
+
+          type ColorSample = { red: number; green: number; blue: number; count: number }
+          const colors: ColorSample[] = [...samples.values()].map((sample) => ({
+            red: Math.round(sample.red / sample.count),
+            green: Math.round(sample.green / sample.count),
+            blue: Math.round(sample.blue / sample.count),
+            count: sample.count,
+          }))
+
+          const medianCut = (source: ColorSample[], depth: number): ColorSample[][] => {
+            if (depth === 0 || source.length === 0) return [source]
+            const redRange = Math.max(...source.map((color) => color.red)) - Math.min(...source.map((color) => color.red))
+            const greenRange = Math.max(...source.map((color) => color.green)) - Math.min(...source.map((color) => color.green))
+            const blueRange = Math.max(...source.map((color) => color.blue)) - Math.min(...source.map((color) => color.blue))
+            const channel = redRange >= greenRange && redRange >= blueRange
+              ? 'red'
+              : greenRange >= blueRange ? 'green' : 'blue'
+            const sorted = [...source].sort((first, second) => first[channel] - second[channel])
+            const total = sorted.reduce((sum, color) => sum + color.count, 0)
+            let running = 0
+            let splitIndex = 1
+            for (let index = 0; index < sorted.length; index += 1) {
+              running += sorted[index].count
+              if (running >= total / 2) {
+                splitIndex = Math.max(1, index + 1)
+                break
+              }
+            }
+            return [
+              ...medianCut(sorted.slice(0, splitIndex), depth - 1),
+              ...medianCut(sorted.slice(splitIndex), depth - 1),
+            ]
+          }
+
+          const boxes = medianCut(colors, 3)
+            .map((box) => {
+              const total = box.reduce((sum, color) => sum + color.count, 0)
+              if (!total) return null
+              return {
+                red: Math.round(box.reduce((sum, color) => sum + color.red * color.count, 0) / total),
+                green: Math.round(box.reduce((sum, color) => sum + color.green * color.count, 0) / total),
+                blue: Math.round(box.reduce((sum, color) => sum + color.blue * color.count, 0) / total),
+                count: total,
+              }
+            })
+            .filter((box): box is ColorSample => box !== null)
+            .sort((first, second) => second.count - first.count)
+            .slice(0, 6)
+
+          const extracted = boxes.map(({ red, green, blue }) =>
+            `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('').toUpperCase()}`
+          )
+          while (extracted.length < 6) {
+            extracted.push(extracted[extracted.length % Math.max(1, extracted.length)] ?? '#808080')
+          }
+          if (!extracted.length) throw new Error('No usable colours were found.')
+          setImageColors(extracted)
+          setLocks(Array(6).fill(false))
+          imageVariantCounter.current += 1
+          const batchSeed = `${file.name}-${imageVariantCounter.current}`
+          const variants = Array.from({ length: 6 }, (_, index) => makePaletteFromImage(
+            extracted,
+            settings,
+            [],
+            `${batchSeed}-${index + 1}`,
+          ))
+          setImageVariants(variants)
+          setSelectedVariant(0)
+          setPalette(variants[0])
+          setNotice('Image colours extracted')
+        } catch (error) {
+          console.error('Could not extract colors from image.', error)
+          setImageColors([])
+          setImageVariants([])
+          setSelectedVariant(0)
+          setImageError('Could not extract colors from this image.')
+        }
+      }
+      image.src = source
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function removeImage() {
+    setImagePreview('')
+    setImageName('')
+    setImageColors([])
+    setImageVariants([])
+    setSelectedVariant(0)
+    setImageError('')
+    setShowImage(false)
+    setLocks(Array(6).fill(false))
+    setNotice('Image palette removed')
+  }
+
   function generateFromSeed(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const value = seedInput.trim()
@@ -238,6 +426,12 @@ function App() {
     }
     setPalette(next)
     setLocks(Array.from({ length: 6 }, (_, index) => index === position && !!seedColor))
+    setImageColors([])
+    setImagePreview('')
+    setImageName('')
+    setImageVariants([])
+    setSelectedVariant(0)
+    setShowImage(false)
     setFocusedColor(position)
     setSeedError('')
     setShowSeed(false)
@@ -245,7 +439,19 @@ function App() {
   }
 
   function updateSetting<Key extends keyof GenerationSettings>(key: Key, value: GenerationSettings[Key]) {
-    setSettings((current) => ({ ...current, [key]: value }))
+    const next = { ...settings, [key]: value }
+    setSettings(next)
+    if (imageColors.length) {
+      const nextVariants = Array.from({ length: 6 }, (_, index) => makePaletteFromImage(
+        imageColors,
+        next,
+        palette.colors.map((color, colorIndex) => locks[colorIndex] ? color : undefined),
+        `${imageName || 'uploaded-image'}-${imageVariantCounter.current}-${index + 1}`,
+      ))
+      setImageVariants(nextVariants)
+      setSelectedVariant(0)
+      setPalette(nextVariants[0])
+    }
   }
 
   useEffect(() => {
@@ -343,6 +549,10 @@ function App() {
           <button type="button" className="button button-seed" onClick={() => { setShowSeed((value) => !value); setSeedError(''); window.setTimeout(() => seedRef.current?.focus(), 0) }}>
             <span className="seed-plus">+</span> Seed color
           </button>
+          <button type="button" className={`button button-seed ${showImage ? 'is-active' : ''}`} onClick={() => { setShowImage((value) => !value); setImageError('') }}>
+            <Icon name="image" size={15} /> From image
+          </button>
+          <input ref={imageInputRef} className="hidden-file-input" type="file" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) extractImagePalette(file); event.target.value = '' }} />
           <button type="button" className="button button-quiet settings-toggle" onClick={() => setShowSettings((value) => !value)}><Icon name="sliders" size={15} /> Tune</button>
         </div>
         <div className="control-right">
@@ -368,8 +578,46 @@ function App() {
         <p className="seed-hint">HEX and CSS color seeds stay in the palette and are locked automatically. Text and numeric seeds are repeatable.</p>
       </form>}
 
+      {showImage && <section className="image-panel" aria-label="Image palette generator">
+        <div className="seed-heading"><div><span className="eyebrow">FROM YOUR IMAGE</span><h2>Extract a palette</h2></div><button type="button" className="icon-button" aria-label="Close image panel" onClick={() => setShowImage(false)}><Icon name="close" /></button></div>
+        <div className="image-fields">
+          {imagePreview ? <div className="image-preview"><img src={imagePreview} alt="Uploaded source" /><span>{imageName}</span></div> : <button type="button" className="image-upload" onClick={() => imageInputRef.current?.click()}><Icon name="image" size={22} /><strong>Choose an image</strong><span>PNG, JPG, WebP, GIF · 12 MB max</span></button>}
+          {imagePreview && <div className="image-actions">
+            <button type="button" className="button button-save" onClick={() => imageInputRef.current?.click()}><Icon name="image" size={15} /> Replace</button>
+            <button type="button" className="button button-generate" onClick={() => generateImageVariants()} disabled={!imageColors.length}><Icon name="spark" size={15} /> Generate 6 palettes</button>
+            <button type="button" className="button button-quiet" onClick={removeImage}>Remove</button>
+          </div>}
+          {imageColors.length > 0 && <div className="image-swatches" aria-label="Extracted source colors">{imageColors.map((hex, index) => <button type="button" key={`${hex}-${index}`} style={{ backgroundColor: hex }} title={hex} aria-label={`Extracted color ${hex}`} onClick={() => { void copyText(hex) }}><span style={{ color: readableTextColor(hex) }}>{hex}</span></button>)}</div>}
+          {imageVariants.length > 0 && <div className="image-variants" aria-label="Generated image palettes">
+            {imageVariants.map((variant, index) => <button
+              type="button"
+              key={`${variant.seed ?? 'variant'}-${index}`}
+              className={selectedVariant === index ? 'selected' : ''}
+              aria-label={`Use generated palette ${index + 1}`}
+              aria-pressed={selectedVariant === index}
+              onClick={() => { setSelectedVariant(index); setPalette(variant); setNotice(`Palette ${index + 1} applied`) }}
+            >{variant.colors.map((color, colorIndex) => <span key={colorIndex} style={{ backgroundColor: color.hex }} />)}</button>)}
+          </div>}
+        </div>
+        {imageError && <p className="form-error" role="alert">{imageError}</p>}
+        <p className="seed-hint">Upload a photo or artwork. Harmony, temperature, saturation, lightness, and contrast are applied instantly.</p>
+      </section>}
+
       {showSettings && <section className="settings-panel" aria-label="Advanced generation settings">
-        <div className="settings-title"><div><span className="eyebrow">MAKE IT YOURS</span><h2>Generation settings</h2></div><button type="button" className="text-button" onClick={() => setSettings(DEFAULT_SETTINGS)}>Reset settings</button></div>
+        <div className="settings-title"><div><span className="eyebrow">MAKE IT YOURS</span><h2>Generation settings</h2></div><button type="button" className="text-button" onClick={() => {
+          setSettings(DEFAULT_SETTINGS)
+          if (imageColors.length) {
+            const nextVariants = Array.from({ length: 6 }, (_, index) => makePaletteFromImage(
+              imageColors,
+              DEFAULT_SETTINGS,
+              palette.colors.map((color, colorIndex) => locks[colorIndex] ? color : undefined),
+              `${imageName || 'uploaded-image'}-${imageVariantCounter.current}-${index + 1}`,
+            ))
+            setImageVariants(nextVariants)
+            setSelectedVariant(0)
+            setPalette(nextVariants[0])
+          }
+        }}>Reset settings</button></div>
         <div className="settings-options">
           <SettingGroup label="Temperature" value={settings.temperature} options={['Balanced', 'Warm', 'Cool', 'Neutral']} onChange={(value) => updateSetting('temperature', value as Temperature)} />
           <SettingGroup label="Saturation" value={settings.saturation} options={['Balanced', 'Muted', 'Vibrant']} onChange={(value) => updateSetting('saturation', value as Saturation)} />
